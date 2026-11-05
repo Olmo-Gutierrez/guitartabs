@@ -7,9 +7,10 @@
 Es una web estática sin dependencias: `index.html` se puede servir tal cual.
 
 - `tab.js`: lee el tab y las afinaciones.
-- `pitch.js`: detecta notas y acordes.
+- `fingering.js`: sugiere la digitación y dónde colocar la mano.
+- `pitch.js`: detecta en el micrófono si acaba de sonar la nota o el acorde esperados.
 - `app.js`: interfaz, sonido y micrófono.
 
-Tests: `npm test`.
+Tests: `npm test`. Añade `?debug` a la URL para ver lo que oye el detector.
 
 Created in [T3 Code](https://t3.codes).

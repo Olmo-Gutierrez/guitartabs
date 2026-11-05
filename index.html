@@ -11,7 +11,7 @@
 <body>
   <main id="setup" class="screen setup">
     <h1>Nota a nota</h1>
-    <p class="lead">Pega un tab y la app te dice qué tocar, una nota cada vez. No avanza hasta que la toques. En el mástil, el círculo verde es la nota de ahora y el punteado, la siguiente.</p>
+    <p class="lead">Pega un tab y la app te dice qué tocar, una nota cada vez. No avanza hasta que la toques. En el mástil, el círculo verde es la nota de ahora, con el dedo que debes usar, y el punteado es la siguiente.</p>
 
     <label for="tab-input">Tab en texto</label>
     <textarea id="tab-input" rows="10" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" placeholder="e|-----0-1-3-|&#10;B|---1-------|&#10;G|-0---------|&#10;D|-----------|&#10;A|-----------|&#10;E|-----------|"></textarea>
@@ -36,6 +36,7 @@
     <header class="topbar">
       <button id="exit" class="icon" type="button" aria-label="Salir">✕</button>
       <div class="progress-text"><span id="section"></span><span id="count"></span></div>
+      <button id="open-hands" class="icon" type="button" aria-label="Cómo colocar las manos">✋</button>
       <button id="restart" class="icon" type="button" aria-label="Volver al principio">↺</button>
     </header>
     <div class="progress"><div id="progress-bar"></div></div>
@@ -47,6 +48,7 @@
     <div class="tools">
       <button id="back" class="tool" type="button">◀ Atrás</button>
       <button id="listen" class="tool" type="button">🔊 Oír</button>
+      <button id="auto" class="tool" type="button" aria-pressed="true" aria-label="Sonar cada nota al llegar a ella">🔔 Auto</button>
       <button id="mic" class="tool" type="button" aria-pressed="false">🎤 Micro</button>
     </div>
     <p id="mic-status" class="mic-status" hidden></p>
@@ -59,6 +61,31 @@
     <button id="again" class="primary" type="button">Otra vez desde el principio</button>
     <button id="new-tab" class="link" type="button">Cambiar de tab</button>
   </main>
+
+  <dialog id="hands" class="hands" aria-labelledby="hands-title">
+    <h2 id="hands-title">Cómo colocar las manos</h2>
+
+    <h3>Mano izquierda (la del mástil)</h3>
+    <p class="fingers-key"><b>1</b> índice <b>2</b> corazón <b>3</b> anular <b>4</b> meñique</p>
+    <ul>
+      <li>El número del círculo verde es el <b>dedo</b> que pisa esa nota.</li>
+      <li>La <b>franja verde</b> del mástil es donde va la mano: un dedo por traste, con el índice en el primero. Si cambia, la app te avisa.</li>
+      <li>El <b>pulgar</b> va detrás del mástil, sin apretar. La palma no toca el mástil.</li>
+      <li>Pisa con la <b>yema</b> y el dedo curvado, justo detrás del traste, sin llegar a tocarlo.</li>
+      <li>Muñeca recta y relajada. Aprieta solo lo justo para que no zumbe.</li>
+      <li>En un arpegio, deja los dedos puestos hasta que cambie la forma, para que las notas sigan sonando.</li>
+    </ul>
+
+    <h3>Mano derecha (la que pulsa)</h3>
+    <ul>
+      <li><b>Pulgar:</b> cuerdas 6, 5 y 4. <b>Índice:</b> cuerda 3. <b>Corazón:</b> cuerda 2. <b>Anular:</b> cuerda 1.</li>
+      <li>Mano relajada sobre la boca de la guitarra, muñeca algo arqueada, sin apoyarla en la tapa.</li>
+      <li>Pulsa con la punta del dedo y deja que la cuerda vibre.</li>
+    </ul>
+
+    <p class="hint">La digitación es una sugerencia calculada a partir del tab. Si el vídeo usa otra, sigue el vídeo. Si tocas con la zurda, cambia izquierda por derecha.</p>
+    <button id="close-hands" class="primary" type="button">Entendido</button>
+  </dialog>
 
   <script type="module" src="app.js"></script>
 </body>

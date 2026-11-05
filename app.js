@@ -1,11 +1,14 @@
 import { TUNINGS, detectTuning, noteName, parseTab, soundingMidi } from './tab.js';
-import { chordPresent, detectPitch, hzToMidi, midiToHz, rms, sameNote } from './pitch.js';
+import { FINGER_NAMES, PLUCK_FINGER, assignFingers, sharesFinger } from './fingering.js';
+import { NoteDetector, midiToHz } from './pitch.js';
 
 const STORAGE_KEY = 'nota-a-nota';
-const MIN_LEVEL = 0.006;
-const ATTACK_RATIO = 1.35;
 const LISTEN_MS = 50;
-const HITS_TO_ADVANCE = 2;
+const FFT_SIZE = 16384;
+const TONE_SECONDS = 0.5;
+// La nota de referencia más lo que tarda en salir de la ventana larga del analizador.
+const TONE_GATE_MS = 900;
+const DEBUG = new URLSearchParams(location.search).has('debug');
 
 const SAMPLE_TAB = `[Calentamiento]
 e|-------------------0-1-3-|
@@ -37,10 +40,10 @@ const el = {
   input: $('tab-input'), status: $('tab-status'), tuning: $('tuning'), capo: $('capo'),
   section: $('section'), count: $('count'), bar: $('progress-bar'),
   instruction: $('instruction'), fretboard: $('fretboard'), strip: $('strip'),
-  back: $('back'), mic: $('mic'), micStatus: $('mic-status'),
+  back: $('back'), auto: $('auto'), mic: $('mic'), micStatus: $('mic-status'), hands: $('hands'),
 };
 
-const state = { steps: [], pos: 0, tuning: TUNINGS[0], capo: 0 };
+const state = { steps: [], pos: 0, tuning: TUNINGS[0], capo: 0, autoSound: true };
 
 function load() {
   try {
@@ -53,7 +56,7 @@ function load() {
 function save() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      text: el.input.value, tuning: el.tuning.value, capo: el.capo.value, pos: state.pos,
+      text: el.input.value, tuning: el.tuning.value, capo: el.capo.value, pos: state.pos, autoSound: state.autoSound,
     }));
   } catch {
     // Sin almacenamiento (modo privado) la app funciona igual, solo que no recuerda el progreso.
@@ -101,12 +104,13 @@ function start() {
     return;
   }
   const saved = load();
-  state.steps = steps;
+  state.steps = assignFingers(steps);
   state.tuning = TUNINGS.find((t) => t.id === el.tuning.value) ?? TUNINGS[0];
   state.capo = Math.max(0, Number(el.capo.value) || 0);
   state.pos = saved.text === text && saved.pos < steps.length ? saved.pos : 0;
   show('practice');
   render();
+  if (state.autoSound) playCurrent();
 }
 
 // --- Dibujo ---
@@ -138,57 +142,75 @@ function sameStep(a, b) {
     && a.notes.every((n, i) => n.string === b.notes[i].string && n.fret === b.notes[i].fret);
 }
 
+function fingersLine(note) {
+  const line = div('fingers');
+  const fretting = document.createElement('b');
+  fretting.textContent = note.finger ? `Dedo ${note.finger} (${FINGER_NAMES[note.finger]})` : 'Sin pisar';
+  line.append(fretting, ` · pulsa con ${PLUCK_FINGER[note.string]}`);
+  return line;
+}
+
+// Solo cabe un aviso: el más urgente.
+function stepTag(step, previous) {
+  if (step.moved) return `✋ Mano aquí: índice al traste ${step.position}`;
+  const technique = step.notes.find((note) => note.technique)?.technique;
+  if (technique) return TECHNIQUE_TEXT[technique];
+  if (sameStep(step, previous)) return 'Otra vez la misma';
+  if (step.notes.length === 1 && sharesFinger(state.steps, state.pos, step.notes[0])) {
+    return 'El mismo dedo pisa las dos cuerdas';
+  }
+  return null;
+}
+
 function renderInstruction(step, previous) {
   const nodes = [];
   if (step.notes.length === 1) {
     const [note] = step.notes;
-    nodes.push(div('big', fretText(note.fret)), div('sub', stringLabel(note.string)));
-    if (note.technique) nodes.push(div('tag', TECHNIQUE_TEXT[note.technique]));
+    nodes.push(div('big', fretText(note.fret)), div('sub', stringLabel(note.string)), fingersLine(note));
   } else {
     nodes.push(div('chord-title', `A la vez · ${step.notes.length} cuerdas`));
     const grid = div('chord-grid');
     for (const note of step.notes) {
       const row = div('chord-row', `Cuerda ${note.string}: `);
       const fret = document.createElement('b');
-      fret.textContent = fretText(note.fret);
+      fret.textContent = note.finger ? `T${note.fret} · dedo ${note.finger}` : 'al aire';
       row.append(fret);
       grid.append(row);
     }
     nodes.push(grid);
   }
-  if (sameStep(step, previous)) nodes.push(div('tag', 'Otra vez la misma'));
+  const tag = stepTag(step, previous);
+  if (tag) nodes.push(div('tag', tag));
   el.instruction.replaceChildren(...nodes);
   el.instruction.classList.remove('pop');
   void el.instruction.offsetWidth;
   el.instruction.classList.add('pop');
 }
 
-function fretWindow(step, next) {
-  const frets = (s) => (s ? s.notes.map((n) => n.fret).filter(Boolean) : []);
-  const fit = (list) => {
-    if (!list.length) return { first: 1, count: 5 };
-    const hi = Math.max(...list);
-    if (hi <= 5) return { first: 1, count: 5 };
-    const first = Math.max(1, Math.min(...list) - 1);
-    return { first, count: Math.max(5, hi - first + 1) };
-  };
-  const both = fit([...frets(step), ...frets(next)]);
-  return both.count <= 7 ? both : fit(frets(step));
+// El mástil se encuadra en la zona de la mano, no en la nota, para que no salte en cada paso.
+function fretWindow(step) {
+  const frets = step.notes.map((n) => n.fret).filter(Boolean);
+  const lo = Math.min(step.position, ...frets);
+  const hi = Math.max(step.position + 3, ...frets);
+  const first = Math.max(1, lo - 1);
+  return { first, count: Math.max(5, hi - first + 1) };
 }
 
 function renderFretboard(step, next) {
   const W = 360;
-  const H = 176;
+  const H = 204;
   const left = 46;
   const top = 12;
   const gap = 26;
-  const { first, count } = fretWindow(step, next);
+  const { first, count } = fretWindow(step);
   const fretW = (W - left - 6) / count;
   const y = (string) => top + (string - 1) * gap;
   const bottom = y(6);
   const fretX = (fret) => (fret === 0 ? 30 : left + (fret - first + 0.5) * fretW);
 
   let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Mástil de la guitarra">`;
+  const handFrom = left + (step.position - first) * fretW;
+  svg += `<rect x="${handFrom}" y="${top - 6}" width="${4 * fretW}" height="${bottom - top + 12}" rx="6" fill="#22c55e" opacity="0.1"/>`;
   for (const marker of [3, 5, 7, 9, 15, 17]) {
     if (marker >= first && marker < first + count) {
       svg += `<circle cx="${fretX(marker)}" cy="${(top + bottom) / 2}" r="5" fill="#34403a"/>`;
@@ -202,8 +224,14 @@ function renderFretboard(step, next) {
     const nut = i === 0 && first === 1;
     svg += `<line x1="${x}" x2="${x}" y1="${top}" y2="${bottom}" stroke="${nut ? '#f1f5f3' : '#4b5a52'}" stroke-width="${nut ? 5 : 1.5}"/>`;
   }
+  svg += `<text x="2" y="${bottom + 28}" fill="#9fb0a8" font-size="11">traste</text>`;
+  svg += `<text x="2" y="${bottom + 46}" fill="#22c55e" font-size="11">dedo</text>`;
   for (let i = 0; i < count; i++) {
-    svg += `<text x="${fretX(first + i)}" y="${bottom + 22}" text-anchor="middle" fill="#9fb0a8" font-size="13">${first + i}</text>`;
+    svg += `<text x="${fretX(first + i)}" y="${bottom + 28}" text-anchor="middle" fill="#9fb0a8" font-size="13">${first + i}</text>`;
+    const finger = first + i - step.position + 1;
+    if (finger >= 1 && finger <= 4) {
+      svg += `<text x="${fretX(first + i)}" y="${bottom + 46}" text-anchor="middle" fill="#22c55e" font-size="13" font-weight="700">${finger}</text>`;
+    }
   }
   const active = new Set(step.notes.map((n) => n.string));
   for (let string = 1; string <= 6; string++) {
@@ -219,7 +247,7 @@ function renderFretboard(step, next) {
   }
   for (const note of step.notes) {
     svg += `<circle cx="${fretX(note.fret)}" cy="${y(note.string)}" r="11.5" fill="#22c55e"/>`;
-    svg += `<text x="${fretX(note.fret)}" y="${y(note.string) + 5}" text-anchor="middle" fill="#04200f" font-size="14" font-weight="800">${note.fret}</text>`;
+    svg += `<text x="${fretX(note.fret)}" y="${y(note.string) + 5}" text-anchor="middle" fill="#04200f" font-size="14" font-weight="800">${note.finger ?? 0}</text>`;
   }
   el.fretboard.innerHTML = `${svg}</svg>`;
 }
@@ -270,6 +298,7 @@ function goTo(pos) {
   state.pos = pos;
   armListening();
   render();
+  if (state.autoSound) playCurrent();
 }
 
 function advance() {
@@ -286,15 +315,33 @@ function advance() {
 // --- Sonido de referencia ---
 
 let audio = null;
-const audioContext = () => (audio ??= new (window.AudioContext ?? window.webkitAudioContext)());
+let output = null;
+
+function audioContext() {
+  if (!audio) {
+    audio = new (window.AudioContext ?? window.webkitAudioContext)();
+    // Con el micro activo iOS baja mucho el volumen: se sube todo lo posible sin que distorsione.
+    const boost = audio.createGain();
+    boost.gain.value = 2.4;
+    const limiter = audio.createDynamicsCompressor();
+    limiter.threshold.value = -9;
+    limiter.knee.value = 6;
+    limiter.ratio.value = 14;
+    limiter.attack.value = 0.002;
+    limiter.release.value = 0.12;
+    boost.connect(limiter).connect(audio.destination);
+    output = boost;
+  }
+  return audio;
+}
 
 function pluck(midi, when) {
   const ctx = audioContext();
   const gain = ctx.createGain();
   gain.gain.setValueAtTime(0.0001, when);
   gain.gain.exponentialRampToValueAtTime(0.35, when + 0.008);
-  gain.gain.exponentialRampToValueAtTime(0.0001, when + 1.3);
-  gain.connect(ctx.destination);
+  gain.gain.exponentialRampToValueAtTime(0.0001, when + TONE_SECONDS);
+  gain.connect(output);
   for (const [harmonic, level] of [[1, 1], [2, 0.45], [3, 0.2]]) {
     const osc = ctx.createOscillator();
     const partial = ctx.createGain();
@@ -302,7 +349,7 @@ function pluck(midi, when) {
     partial.gain.value = level;
     osc.connect(partial).connect(gain);
     osc.start(when);
-    osc.stop(when + 1.35);
+    osc.stop(when + TONE_SECONDS + 0.05);
   }
 }
 
@@ -312,65 +359,51 @@ function playCurrent() {
   const notes = [...state.steps[state.pos].notes].sort((a, b) => b.string - a.string);
   notes.forEach((note, i) => pluck(soundingMidi(note, state.tuning, state.capo), ctx.currentTime + 0.01 + i * 0.03));
   // Que el micro no se oiga a sí mismo y avance solo.
-  listening.ignoreUntil = performance.now() + 1500;
+  listening.ignoreUntil = performance.now() + TONE_GATE_MS + notes.length * 30;
+}
+
+function setAutoSound(on) {
+  state.autoSound = on;
+  el.auto.setAttribute('aria-pressed', String(on));
+  el.auto.textContent = on ? '🔔 Auto' : '🔕 Auto';
+  save();
 }
 
 // --- Micrófono ---
 
 const listening = {
-  timer: null, stream: null, analyser: null, time: null, spectrum: null,
-  floor: Infinity, needsAttack: false, hits: 0, ignoreUntil: 0,
+  timer: null, stream: null, analyser: null, time: null, spectrum: null, detector: null, ignoreUntil: 0,
 };
 
 function wantedMidis(step) {
   return step.notes.map((note) => soundingMidi(note, state.tuning, state.capo));
 }
 
-// Si la nota nueva ya estaba sonando en el paso anterior, hace falta volver a pulsarla.
 function armListening() {
   const step = state.steps[state.pos];
-  const previous = state.steps[state.pos - 1];
-  const ringing = new Set(previous ? wantedMidis(previous).map((m) => m % 12) : []);
-  listening.needsAttack = step ? wantedMidis(step).some((m) => ringing.has(m % 12)) : false;
-  listening.floor = Infinity;
-  listening.hits = 0;
-  listening.ignoreUntil = Math.max(listening.ignoreUntil, performance.now() + 120);
+  if (step) listening.detector?.arm(wantedMidis(step));
+}
+
+function micStatusText(detector, open) {
+  if (DEBUG) {
+    const notes = detector.targets.map((t) => `${noteName(t.midi)} ${t.db?.toFixed(0)}${t.isPeak ? '▲' : ''}${t.attack ? '!' : ''}`);
+    return `${notes.join(' ')} · umbral ${detector.threshold?.toFixed(0)}`;
+  }
+  if (!open) return '🔊 Escucha la nota…';
+  if (detector.targets.length > 1) return `🎸 Ahora tú · oigo ${detector.heardCount} de ${detector.required}`;
+  return '🎸 Ahora tú';
 }
 
 function listenTick() {
-  const { analyser, time, spectrum } = listening;
-  const step = state.steps[state.pos];
-  if (!step || el.practice.hidden) return;
+  const { analyser, time, spectrum, detector } = listening;
+  if (!state.steps[state.pos] || el.practice.hidden) return;
 
+  analyser.getFloatFrequencyData(spectrum);
   analyser.getFloatTimeDomainData(time);
-  const recent = time.subarray(time.length / 2);
-  const level = rms(recent);
-  listening.floor = Math.min(listening.floor, level);
-  if (performance.now() < listening.ignoreUntil) return;
-
-  if (level < MIN_LEVEL) {
-    listening.hits = 0;
-    setMicStatus('Escuchando… toca la nota');
-    return;
-  }
-  if (listening.needsAttack) {
-    if (level < listening.floor * ATTACK_RATIO) return;
-    listening.needsAttack = false;
-  }
-
-  const wanted = wantedMidis(step);
-  let matched;
-  if (wanted.length === 1) {
-    const hz = detectPitch(recent, audio.sampleRate);
-    matched = hz !== null && sameNote(hzToMidi(hz), wanted[0]);
-    if (hz !== null) setMicStatus(`Oigo: ${noteName(hzToMidi(hz))}`);
-  } else {
-    analyser.getFloatFrequencyData(spectrum);
-    matched = chordPresent(spectrum, audio.sampleRate, wanted);
-  }
-
-  listening.hits = matched ? listening.hits + 1 : 0;
-  if (listening.hits >= HITS_TO_ADVANCE) advance();
+  const open = performance.now() >= listening.ignoreUntil;
+  const done = detector.feed(spectrum, time, open);
+  setMicStatus(micStatusText(detector, open));
+  if (done) advance();
 }
 
 function setMicStatus(text, isError = false) {
@@ -387,12 +420,16 @@ async function startMic() {
   try {
     const ctx = audioContext();
     await ctx.resume();
+    if (navigator.audioSession) navigator.audioSession.type = 'play-and-record';
     // Sin estos filtros: la cancelación de ruido del móvil se come el sonido de la guitarra.
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
     });
+    // En iOS, al abrir el micro el sonido puede pasar al auricular; reiniciar el contexto lo devuelve al altavoz.
+    await ctx.suspend();
+    await ctx.resume();
     const analyser = ctx.createAnalyser();
-    analyser.fftSize = 8192;
+    analyser.fftSize = FFT_SIZE;
     analyser.smoothingTimeConstant = 0;
     ctx.createMediaStreamSource(stream).connect(analyser);
     Object.assign(listening, {
@@ -400,11 +437,12 @@ async function startMic() {
       analyser,
       time: new Float32Array(analyser.fftSize),
       spectrum: new Float32Array(analyser.frequencyBinCount),
+      detector: new NoteDetector(ctx.sampleRate),
       timer: setInterval(listenTick, LISTEN_MS),
     });
     armListening();
     el.mic.setAttribute('aria-pressed', 'true');
-    setMicStatus('Escuchando… toca la nota');
+    setMicStatus('🎸 Ahora tú');
   } catch (error) {
     const denied = error.name === 'NotAllowedError';
     setMicStatus(denied ? 'Permiso de micro denegado. Actívalo en el navegador o usa el botón.' : 'No he podido abrir el micro. Usa el botón.', true);
@@ -414,7 +452,8 @@ async function startMic() {
 function stopMic() {
   clearInterval(listening.timer);
   listening.stream?.getTracks().forEach((track) => track.stop());
-  Object.assign(listening, { timer: null, stream: null, analyser: null });
+  Object.assign(listening, { timer: null, stream: null, analyser: null, detector: null });
+  if (navigator.audioSession) navigator.audioSession.type = 'auto';
   el.mic.setAttribute('aria-pressed', 'false');
   setMicStatus('');
 }
@@ -447,6 +486,7 @@ document.addEventListener('visibilitychange', () => {
 el.tuning.append(...TUNINGS.map((t) => new Option(t.name, t.id)));
 
 const saved = load();
+setAutoSound(saved.autoSound ?? true);
 if (saved.text) el.input.value = saved.text;
 if (saved.tuning) el.tuning.value = saved.tuning;
 if (saved.capo) el.capo.value = saved.capo;
@@ -472,7 +512,10 @@ $('start').addEventListener('click', start);
 $('next').addEventListener('click', advance);
 el.back.addEventListener('click', () => goTo(state.pos - 1));
 $('listen').addEventListener('click', playCurrent);
+el.auto.addEventListener('click', () => setAutoSound(!state.autoSound));
 el.mic.addEventListener('click', () => (listening.stream ? stopMic() : startMic()));
+$('open-hands').addEventListener('click', () => el.hands.showModal());
+$('close-hands').addEventListener('click', () => el.hands.close());
 $('exit').addEventListener('click', () => show('setup'));
 $('restart').addEventListener('click', () => goTo(0));
 $('again').addEventListener('click', () => {
@@ -489,7 +532,7 @@ window.addEventListener('resize', () => {
 });
 // Los pedales de pasar página por Bluetooth envían estas teclas.
 document.addEventListener('keydown', (event) => {
-  if (el.practice.hidden || event.repeat) return;
+  if (el.practice.hidden || el.hands.open || event.repeat) return;
   if ([' ', 'ArrowRight', 'ArrowDown', 'PageDown', 'Enter'].includes(event.key)) {
     event.preventDefault();
     advance();
