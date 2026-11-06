@@ -97,13 +97,21 @@ function describeTab() {
     el.status.textContent = 'Pídele a Gemini el tab «en formato ASCII, con las 6 cuerdas», y pégalo aquí.';
     return;
   }
-  const { steps, labels, capo } = parseTab(text);
+  const { steps, labels, capo, bpm, rhythmBlocks, rhythmErrors } = parseTab(text);
   const tuning = detectTuning(labels);
   if (tuning) el.tuning.value = tuning.id;
   if (capo !== null) el.capo.value = capo;
   if (steps.length) {
-    el.status.textContent = `He encontrado ${steps.length} pasos.`;
+    const parts = [`He encontrado ${steps.length} pasos.`];
+    if (bpm) parts.push(`BPM del tab: ${bpm}.`);
+    if (rhythmBlocks) parts.push(`Ritmo aplicado en ${rhythmBlocks} bloque${rhythmBlocks > 1 ? 's' : ''}.`);
+    el.status.textContent = parts.join(' ');
     el.status.classList.add('ok');
+    if (rhythmErrors.length) {
+      el.status.textContent += ` Ritmo sin aplicar: ${rhythmErrors.join('; ')}.`;
+      el.status.classList.remove('ok');
+      el.status.classList.add('error');
+    }
   } else {
     el.status.textContent = 'No veo ningún tab: necesito bloques de 6 líneas, una por cuerda.';
     el.status.classList.add('error');
@@ -112,7 +120,7 @@ function describeTab() {
 
 function start() {
   const text = el.input.value;
-  const { steps } = parseTab(text);
+  const { steps, bpm } = parseTab(text);
   if (!steps.length) {
     describeTab();
     if (!text.trim()) {
@@ -122,6 +130,8 @@ function start() {
     return;
   }
   const saved = load();
+  // El BPM del tab solo cuenta si es un tab nuevo: así tus ajustes de velocidad no se pisan al reabrir la app.
+  if (bpm && saved.text !== text) setBpm(bpm);
   state.steps = assignFingers(steps);
   state.tuning = TUNINGS.find((t) => t.id === el.tuning.value) ?? TUNINGS[0];
   state.capo = Math.max(0, Number(el.capo.value) || 0);

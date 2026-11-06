@@ -137,6 +137,58 @@ test('un tab sin separación clara se mantiene en duraciones razonables', () => 
   assert.ok(steps.every((s) => s.duration >= 0.5 && s.duration <= 4));
 });
 
+const block4 = `e|-0-0-0-0-|
+B|---------|
+G|---------|
+D|---------|
+A|---------|
+E|---------|`;
+
+test('la línea Ritmo da la duración de cada nota, con silencios y puntillos', () => {
+  const { steps, rhythmBlocks, rhythmErrors } = parseTab(`${block4}\nRitmo: 8 8. 16 r8 4`);
+  // La r8 tras la semicorchea alarga esa nota: 0,5 + 1.
+  assert.deepEqual(steps.map((s) => s.duration), [1, 1.5, 1.5, 2]);
+  assert.equal(rhythmBlocks, 1);
+  assert.deepEqual(rhythmErrors, []);
+});
+
+test('un ritmo con distinto número de valores no se aplica y lo dice', () => {
+  const { steps, rhythmBlocks, rhythmErrors } = parseTab(`${block4}\nRitmo: 8 8 4`);
+  assert.equal(rhythmBlocks, 0);
+  assert.equal(rhythmErrors.length, 1);
+  assert.match(rhythmErrors[0], /bloque 1: 3 valores para 4 notas/);
+  assert.deepEqual(steps.map((s) => s.duration), [1, 1, 1, 1]);
+});
+
+test('un valor desconocido se señala con su texto', () => {
+  const { rhythmErrors } = parseTab(`${block4}\nRitmo: 8 8 3 4`);
+  assert.match(rhythmErrors[0], /«3» no es un valor/);
+});
+
+test('una línea de ritmo sin tab encima avisa', () => {
+  assert.equal(parseTab('Ritmo: 4 4').rhythmErrors.length, 1);
+});
+
+test('cada línea de ritmo va con el bloque que tiene encima, y no cambia la sección', () => {
+  const block2 = `e|-0-3-|
+B|-----|
+G|-----|
+D|-----|
+A|-----|
+E|-----|`;
+  const { steps, rhythmErrors } = parseTab(`[Intro]\n${block4}\nRitmo: 4 4 4 4\n\n[Verso]\n${block2}\nRitmo: 16 16`);
+  assert.deepEqual(rhythmErrors, []);
+  assert.deepEqual(steps.filter((s) => s.section === 'Intro').map((s) => s.duration), [2, 2, 2, 2]);
+  assert.deepEqual(steps.filter((s) => s.section === 'Verso').map((s) => s.duration), [0.5, 0.5]);
+});
+
+test('lee el BPM del tab, solo si es razonable', () => {
+  assert.equal(parseTab(`BPM: 92\n${block4}`).bpm, 92);
+  assert.equal(parseTab(`♩ = 120\n${block4}`).bpm, 120);
+  assert.equal(parseTab(block4).bpm, null);
+  assert.equal(parseTab(`tempo 400\n${block4}`).bpm, null);
+});
+
 test('calcula el sonido real con afinación y cejilla', () => {
   const standard = TUNINGS[0];
   assert.equal(soundingMidi({ string: 6, fret: 0 }, standard), 40);

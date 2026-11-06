@@ -11,6 +11,8 @@ Es una web estática sin dependencias: `index.html` se puede servir tal cual.
 - `pitch.js`: detecta en el micrófono si acaba de sonar la nota o el acorde esperados.
 - `app.js`: interfaz, sonido y micrófono.
 
+Formato opcional para el ritmo: una línea `BPM: 92` en cualquier sitio, y justo debajo de cada bloque de tab una línea `Ritmo:` con un valor por cada columna que tenga notas (acordes incluidos): `1` redonda, `2` blanca, `4` negra, `8` corchea, `16` semicorchea, con punto para alargar (`8.`) y `r` delante para silencios (`r8`). Si el número de valores no cuadra con las notas, la app lo dice y usa la separación del tab.
+
 Tests: `npm test`. Añade `?debug` a la URL para ver lo que oye el detector.
 
 Created in [T3 Code](https://t3.codes).
