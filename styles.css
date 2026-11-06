@@ -184,16 +184,42 @@ textarea {
 .mic-status { flex: none; margin: 0; text-align: center; color: var(--muted); font-size: 0.9rem; }
 .mic-status.error { color: var(--warn); }
 
+.transport { flex: none; display: none; grid-template-columns: 1.1fr 0.9fr 1.1fr 1.2fr; gap: 6px; }
+.tempo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(0.8rem, 3.8vw, 1rem);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.playing .tools { display: none; }
+.playing .transport { display: grid; }
+.playing .next { display: none; }
+
+.actions { flex: none; display: flex; gap: 8px; }
 .next {
-  flex: none;
+  flex: 1;
+  min-width: 0;
   min-height: 84px;
   border: 0;
   border-radius: 14px;
   background: var(--accent-strong);
-  font-size: 1.35rem;
+  font-size: clamp(1.05rem, 5vw, 1.35rem);
   font-weight: 800;
 }
 .next:active { background: var(--accent); }
+.rhythm {
+  flex: none;
+  width: 84px;
+  border: 1px solid var(--accent);
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--accent);
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+.playing .rhythm { flex: 1; min-height: 84px; font-size: 1.3rem; }
 
 .hands {
   width: min(92vw, 560px);
@@ -222,7 +248,8 @@ textarea {
   .fretboard svg { max-height: 25vh; }
   .strip { padding: 4px; font-size: 0.72rem; }
   .tool { min-height: 42px; }
-  .next { min-height: 68px; font-size: 1.25rem; }
+  .next { min-height: 68px; font-size: clamp(1rem, 4.7vw, 1.25rem); }
+  .playing .rhythm { min-height: 68px; }
   .big { font-size: clamp(2rem, 10vw, 3rem); }
   .sub { font-size: 1.05rem; margin-top: 2px; }
 }
@@ -232,7 +259,9 @@ textarea {
   .practice { gap: 8px; }
   .strip { display: none; }
   .tool { min-height: 40px; }
-  .next { min-height: 64px; font-size: 1.2rem; }
+  .next { min-height: 64px; font-size: 1rem; }
+  .playing .rhythm { min-height: 64px; }
+  .rhythm { width: 76px; font-size: 0.85rem; }
   .big { font-size: 2.2rem; }
 }
 
@@ -248,12 +277,16 @@ textarea {
   }
   .topbar, .progress { grid-column: 1 / -1; }
   .instruction { grid-column: 1; grid-row: 3; min-height: 0; }
-  .tools { grid-column: 1; grid-row: 4; }
+  .tools, .transport { grid-column: 1; grid-row: 4; }
   .tool { min-height: 38px; font-size: 0.74rem; }
+  .tempo { font-size: 0.78rem; }
+  .actions { grid-column: 1; grid-row: 5; }
+  .rhythm { width: 72px; font-size: 0.82rem; }
+  .playing .rhythm { min-height: 52px; font-size: 1.05rem; }
   .chord-row { font-size: 0.78rem; }
   .chord-grid { gap: 1px 8px; }
   .fingers { font-size: 0.88rem; }
-  .next { grid-column: 1; grid-row: 5; min-height: 52px; font-size: 1.1rem; }
+  .next { min-height: 52px; font-size: 0.95rem; }
   .fretboard { grid-column: 2; grid-row: 3 / 5; min-height: 0; overflow: hidden; }
   .fretboard svg { height: 100%; max-height: none; }
   .mic-status { grid-column: 2; grid-row: 5; align-self: center; }

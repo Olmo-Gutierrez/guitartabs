@@ -56,7 +56,7 @@ function readNotes(body, string) {
   return notes;
 }
 
-function blockToSteps(block, section) {
+function blockToSteps(block, section, blockIndex) {
   // Algunos tabs escriben las cuerdas al revés (E grave arriba, e aguda abajo).
   const reversed = block[0].label === 'E' && block[5].label === 'e';
   const ordered = reversed ? [...block].reverse() : block;
@@ -68,7 +68,7 @@ function blockToSteps(block, section) {
   let end = -1;
   for (const { col, width, ...note } of notes) {
     if (col > end) {
-      steps.push({ notes: [], section });
+      steps.push({ notes: [], section, block: blockIndex, col });
     }
     end = Math.max(end, col + width - 1);
     steps.at(-1).notes.push(note);
@@ -76,15 +76,32 @@ function blockToSteps(block, section) {
   return { steps, labels: ordered.map((line) => line.label) };
 }
 
+// El ritmo sale de la separación entre notas en el tab: 1 es la separación más habitual.
+function assignDurations(steps) {
+  const gaps = [];
+  steps.forEach((step, i) => {
+    const next = steps[i + 1];
+    if (next?.block === step.block) gaps.push(next.col - step.col);
+  });
+  gaps.sort((a, b) => a - b);
+  const unit = gaps[(gaps.length - 1) >> 1] || 1;
+  steps.forEach((step, i) => {
+    const next = steps[i + 1];
+    const gap = next?.block === step.block ? next.col - step.col : unit;
+    step.duration = Math.min(4, Math.max(0.5, Math.round((gap / unit) * 2) / 2));
+  });
+}
+
 export function parseTab(text) {
   const steps = [];
   let labels = null;
   let section = '';
   let run = [];
+  let blockCount = 0;
 
   const flush = () => {
     for (let i = 0; i + 6 <= run.length; i += 6) {
-      const block = blockToSteps(run.slice(i, i + 6), section);
+      const block = blockToSteps(run.slice(i, i + 6), section, blockCount++);
       steps.push(...block.steps);
       if (!labels && block.labels.every(Boolean)) labels = block.labels;
     }
@@ -102,6 +119,7 @@ export function parseTab(text) {
     if (heading) section = (heading[1] ?? heading[2] ?? heading[3] ?? heading[4]).replaceAll('*', '').trim();
   }
   flush();
+  assignDurations(steps);
 
   const capo = text.match(/capo\D{0,12}(\d{1,2})/i);
   return { steps, labels, capo: capo ? Number(capo[1]) : null };

@@ -116,6 +116,27 @@ test('no se inventa pasos a partir de texto normal', () => {
   assert.equal(parseTab('--- Verso ---\n--- Verso ---\n--- Verso ---\n--- Verso ---\n--- Verso ---\n--- Verso ---').steps.length, 0);
 });
 
+test('saca el ritmo de la separación entre notas', () => {
+  const { steps } = parseTab(`e|-0-0-0---0-----0-|
+B|-----------------|
+G|-----------------|
+D|-----------------|
+A|-----------------|
+E|-----------------|`);
+  assert.deepEqual(steps.map((s) => s.duration), [1, 1, 2, 3, 1]);
+});
+
+test('el final de un bloque no alarga la nota aunque sobren guiones', () => {
+  const block = 'e|-0-0-0----------|\nB|---|\nG|---|\nD|---|\nA|---|\nE|---|';
+  const { steps } = parseTab(`${block}\n\n${block}`);
+  assert.deepEqual(steps.map((s) => s.duration), [1, 1, 1, 1, 1, 1]);
+});
+
+test('un tab sin separación clara se mantiene en duraciones razonables', () => {
+  const { steps } = parseTab('e|-0---------------------0-0-|\nB|---|\nG|---|\nD|---|\nA|---|\nE|---|');
+  assert.ok(steps.every((s) => s.duration >= 0.5 && s.duration <= 4));
+});
+
 test('calcula el sonido real con afinación y cejilla', () => {
   const standard = TUNINGS[0];
   assert.equal(soundingMidi({ string: 6, fret: 0 }, standard), 40);

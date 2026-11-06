@@ -51,8 +51,17 @@
       <button id="auto" class="tool" type="button" aria-pressed="true" aria-label="Sonar cada nota al llegar a ella">🔔 Auto</button>
       <button id="mic" class="tool" type="button" aria-pressed="false">🎤 Micro</button>
     </div>
+    <div class="transport">
+      <button id="slower" class="tool" type="button" aria-label="Más lento">− Lento</button>
+      <output id="tempo" class="tempo" aria-live="off"></output>
+      <button id="faster" class="tool" type="button" aria-label="Más rápido">Rápido +</button>
+      <button id="loop" class="tool" type="button" aria-pressed="true" aria-label="Repetir al terminar">🔁 Repetir</button>
+    </div>
     <p id="mic-status" class="mic-status" hidden></p>
-    <button id="next" class="next" type="button">Ya la he tocado ▶</button>
+    <div class="actions">
+      <button id="rhythm" class="rhythm" type="button">▶ Ritmo</button>
+      <button id="next" class="next" type="button">Ya la he tocado ▶</button>
+    </div>
   </main>
 
   <main id="done" class="screen done" hidden>

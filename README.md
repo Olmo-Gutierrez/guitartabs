@@ -2,7 +2,7 @@
 
 # Guitartabs
 
-**Nota a nota**: pega un tab en texto y la app te enseña qué tocar, una nota cada vez, y espera a que la toques. Avanzas con el botón, con un pedal Bluetooth o con el micrófono.
+**Nota a nota**: pega un tab en texto y la app te enseña qué tocar, una nota cada vez, y espera a que la toques. Avanzas con el botón, con un pedal Bluetooth o con el micrófono. Con **▶ Ritmo** el tab se toca solo a la velocidad que elijas, siguiendo la separación entre notas del propio tab.
 
 Es una web estática sin dependencias: `index.html` se puede servir tal cual.
 

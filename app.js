@@ -8,6 +8,16 @@ const FFT_SIZE = 16384;
 const TONE_SECONDS = 0.5;
 // La nota de referencia más lo que tarda en salir de la ventana larga del analizador.
 const TONE_GATE_MS = 900;
+const DEFAULT_BPM = 80;
+const MIN_BPM = 30;
+const MAX_BPM = 200;
+const BPM_STEP = 5;
+const PLAYBACK_TICK_MS = 25;
+const PLAYBACK_LOOKAHEAD_SECONDS = 0.12;
+const PLAYBACK_RING_SECONDS = 1.6;
+// Las notas se solapan al dejarlas sonar: se baja el nivel para que no saturen.
+const PLAYBACK_LEVEL = 0.55;
+const STRUM_SECONDS = 0.012;
 const DEBUG = new URLSearchParams(location.search).has('debug');
 
 const SAMPLE_TAB = `[Calentamiento]
@@ -41,9 +51,10 @@ const el = {
   section: $('section'), count: $('count'), bar: $('progress-bar'),
   instruction: $('instruction'), fretboard: $('fretboard'), strip: $('strip'),
   back: $('back'), auto: $('auto'), mic: $('mic'), micStatus: $('mic-status'), hands: $('hands'),
+  rhythm: $('rhythm'), tempo: $('tempo'), loop: $('loop'),
 };
 
-const state = { steps: [], pos: 0, tuning: TUNINGS[0], capo: 0, autoSound: true };
+const state = { steps: [], pos: 0, tuning: TUNINGS[0], capo: 0, autoSound: true, bpm: DEFAULT_BPM, loop: true };
 
 function load() {
   try {
@@ -56,7 +67,13 @@ function load() {
 function save() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      text: el.input.value, tuning: el.tuning.value, capo: el.capo.value, pos: state.pos, autoSound: state.autoSound,
+      text: el.input.value,
+      tuning: el.tuning.value,
+      capo: el.capo.value,
+      pos: state.pos,
+      autoSound: state.autoSound,
+      bpm: state.bpm,
+      loop: state.loop,
     }));
   } catch {
     // Sin almacenamiento (modo privado) la app funciona igual, solo que no recuerda el progreso.
@@ -64,6 +81,7 @@ function save() {
 }
 
 function show(screen) {
+  stopPlayback();
   for (const name of ['setup', 'practice', 'done']) el[name].hidden = name !== screen;
   if (screen === 'practice') requestWakeLock();
   else releaseWakeLock();
@@ -295,6 +313,7 @@ function render() {
 // --- Navegación ---
 
 function goTo(pos) {
+  stopPlayback();
   state.pos = pos;
   armListening();
   render();
@@ -335,21 +354,19 @@ function audioContext() {
   return audio;
 }
 
-function pluck(midi, when) {
+function pluck(midi, when, seconds = TONE_SECONDS, destination = output) {
   const ctx = audioContext();
-  const gain = ctx.createGain();
-  gain.gain.setValueAtTime(0.0001, when);
-  gain.gain.exponentialRampToValueAtTime(0.35, when + 0.008);
-  gain.gain.exponentialRampToValueAtTime(0.0001, when + TONE_SECONDS);
-  gain.connect(output);
-  for (const [harmonic, level] of [[1, 1], [2, 0.45], [3, 0.2]]) {
+  // Como en una cuerda real, los armónicos agudos se apagan antes que la nota.
+  for (const [harmonic, level] of [[1, 0.35], [2, 0.16], [3, 0.07], [4, 0.03]]) {
     const osc = ctx.createOscillator();
     const partial = ctx.createGain();
     osc.frequency.value = midiToHz(midi) * harmonic;
-    partial.gain.value = level;
-    osc.connect(partial).connect(gain);
+    partial.gain.setValueAtTime(0.0001, when);
+    partial.gain.exponentialRampToValueAtTime(level, when + 0.006);
+    partial.gain.exponentialRampToValueAtTime(0.0001, when + seconds / (1 + 0.5 * (harmonic - 1)));
+    osc.connect(partial).connect(destination);
     osc.start(when);
-    osc.stop(when + TONE_SECONDS + 0.05);
+    osc.stop(when + seconds + 0.05);
   }
 }
 
@@ -366,6 +383,83 @@ function setAutoSound(on) {
   state.autoSound = on;
   el.auto.setAttribute('aria-pressed', String(on));
   el.auto.textContent = on ? '🔔 Auto' : '🔕 Auto';
+  save();
+}
+
+// --- Escuchar a ritmo ---
+
+const playback = { active: false, timer: null, bus: null, nextPos: 0, nextTime: 0, queue: [] };
+
+// Se programa un poco por adelantado con el reloj de audio: un temporizador no daría un ritmo estable.
+function schedulePlayback() {
+  const now = audio.currentTime;
+  while (playback.nextTime < now + PLAYBACK_LOOKAHEAD_SECONDS) {
+    if (playback.nextPos >= state.steps.length) {
+      if (!state.loop) break;
+      playback.nextPos = 0;
+    }
+    const step = state.steps[playback.nextPos];
+    const notes = [...step.notes].sort((a, b) => b.string - a.string);
+    notes.forEach((note, i) => {
+      pluck(soundingMidi(note, state.tuning, state.capo), playback.nextTime + i * STRUM_SECONDS, PLAYBACK_RING_SECONDS, playback.bus);
+    });
+    playback.queue.push({ pos: playback.nextPos, time: playback.nextTime });
+    playback.nextTime += step.duration * (30 / state.bpm);
+    playback.nextPos++;
+  }
+
+  while (playback.queue.length && playback.queue[0].time <= now) {
+    state.pos = playback.queue.shift().pos;
+    render();
+  }
+  if (!playback.queue.length && playback.nextPos >= state.steps.length && !state.loop && now >= playback.nextTime) {
+    stopPlayback();
+  }
+}
+
+function startPlayback() {
+  const ctx = audioContext();
+  ctx.resume();
+  const bus = ctx.createGain();
+  bus.gain.value = PLAYBACK_LEVEL;
+  bus.connect(output);
+  // Al final del tab, volver a pulsar empieza de nuevo.
+  const from = state.pos === state.steps.length - 1 ? 0 : state.pos;
+  Object.assign(playback, {
+    active: true, bus, nextPos: from, nextTime: ctx.currentTime + 0.08, queue: [], timer: setInterval(schedulePlayback, PLAYBACK_TICK_MS),
+  });
+  el.practice.classList.add('playing');
+  el.rhythm.textContent = '⏹ Parar';
+  el.rhythm.setAttribute('aria-pressed', 'true');
+  if (listening.stream) setMicStatus('🎧 Micro en pausa mientras suena');
+  schedulePlayback();
+}
+
+function stopPlayback() {
+  if (!playback.active) return;
+  clearInterval(playback.timer);
+  const { bus } = playback;
+  bus.gain.setTargetAtTime(0, audio.currentTime, 0.03);
+  setTimeout(() => bus.disconnect(), 400);
+  Object.assign(playback, { active: false, timer: null, bus: null, queue: [] });
+  el.practice.classList.remove('playing');
+  el.rhythm.textContent = '▶ Ritmo';
+  el.rhythm.setAttribute('aria-pressed', 'false');
+  // Que el micro no tome por tuyo lo último que ha sonado.
+  listening.ignoreUntil = performance.now() + TONE_GATE_MS;
+  armListening();
+  save();
+}
+
+function setBpm(bpm) {
+  state.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, bpm));
+  el.tempo.textContent = `${state.bpm} BPM`;
+  save();
+}
+
+function setLoop(on) {
+  state.loop = on;
+  el.loop.setAttribute('aria-pressed', String(on));
   save();
 }
 
@@ -396,7 +490,7 @@ function micStatusText(detector, open) {
 
 function listenTick() {
   const { analyser, time, spectrum, detector } = listening;
-  if (!state.steps[state.pos] || el.practice.hidden) return;
+  if (!state.steps[state.pos] || el.practice.hidden || playback.active) return;
 
   analyser.getFloatFrequencyData(spectrum);
   analyser.getFloatTimeDomainData(time);
@@ -476,6 +570,8 @@ function releaseWakeLock() {
 }
 
 document.addEventListener('visibilitychange', () => {
+  // En segundo plano el móvil frena los temporizadores y el ritmo se rompería.
+  if (document.visibilityState !== 'visible') stopPlayback();
   if (document.visibilityState !== 'visible' || el.practice.hidden) return;
   requestWakeLock();
   if (listening.stream) audio.resume();
@@ -486,10 +582,12 @@ document.addEventListener('visibilitychange', () => {
 el.tuning.append(...TUNINGS.map((t) => new Option(t.name, t.id)));
 
 const saved = load();
-setAutoSound(saved.autoSound ?? true);
 if (saved.text) el.input.value = saved.text;
 if (saved.tuning) el.tuning.value = saved.tuning;
 if (saved.capo) el.capo.value = saved.capo;
+setAutoSound(saved.autoSound ?? true);
+setBpm(saved.bpm ?? DEFAULT_BPM);
+setLoop(saved.loop ?? true);
 if (saved.text) {
   const { steps } = parseTab(saved.text);
   el.status.textContent = `Tab guardado: ${steps.length} pasos.`;
@@ -514,6 +612,10 @@ el.back.addEventListener('click', () => goTo(state.pos - 1));
 $('listen').addEventListener('click', playCurrent);
 el.auto.addEventListener('click', () => setAutoSound(!state.autoSound));
 el.mic.addEventListener('click', () => (listening.stream ? stopMic() : startMic()));
+el.rhythm.addEventListener('click', () => (playback.active ? stopPlayback() : startPlayback()));
+$('slower').addEventListener('click', () => setBpm(state.bpm - BPM_STEP));
+$('faster').addEventListener('click', () => setBpm(state.bpm + BPM_STEP));
+el.loop.addEventListener('click', () => setLoop(!state.loop));
 $('open-hands').addEventListener('click', () => el.hands.showModal());
 $('close-hands').addEventListener('click', () => el.hands.close());
 $('exit').addEventListener('click', () => show('setup'));
@@ -533,6 +635,11 @@ window.addEventListener('resize', () => {
 // Los pedales de pasar página por Bluetooth envían estas teclas.
 document.addEventListener('keydown', (event) => {
   if (el.practice.hidden || el.hands.open || event.repeat) return;
+  if (playback.active) {
+    if ([' ', 'Enter'].includes(event.key)) event.preventDefault();
+    stopPlayback();
+    return;
+  }
   if ([' ', 'ArrowRight', 'ArrowDown', 'PageDown', 'Enter'].includes(event.key)) {
     event.preventDefault();
     advance();
